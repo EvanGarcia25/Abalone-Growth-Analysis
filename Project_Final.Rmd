@@ -1,0 +1,255 @@
+---
+title: "Abalone Regression Analysis"
+author: "Evan Garcia"
+date: "2024-03-16"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(caret)
+library(leaps)
+library(car)
+library(knitr)
+library(kableExtra)
+```
+
+## Introduction
+Abalone are a type of shellfish that resemble mussels or oysters and are found along coastal waters; their meat is considered a delicacy and they are farmed or fished around the world. The Abalone dataset contains information collected in 1994 of 4177 observed organisms with 8 features: Sex, length, diameter, height, Whole weight, shucked weight, viscera weight, shell weight, and the response variable rings. The sex variable corresponds to the sex of the Abalone observed, as a Male, Female, or Infant, where the sex of the organism is unclear. The continuous variables have all been scaled by neural network prior to download, dividing the measurements by a factor of 200 where the volumetric measurements are done in millimeters and weight measurements conducted in grams. Whole weight refers to the total weight of the Abalone and the Shucked weight refers to the weight of the edible meat of an Abalone. Viscera Weight refers to the weight of the organs and the shell weight to the weight of the shell. Analyzing this data and fitting a regression model with respect to the age of Abalone may be useful since it could allow for age predictions without having to manually cut open each organism and count the number of rings present. 
+
+## Data Processing
+Fortunately all missing values were removed prior to the publishing of the data, so the values were convenient to work with. The rings variable is simply a way to describe the age, where adding 1.5 to the rings becomes the age of an Abalone since thats how many years it takes for rings to being to show in the species. The Age variable becomes the replacement for rings in the table. After fitting and initial linear model to check for notable predictors it becomes apparent the Male sex is not a significant predictor of age. It also becomes clear that Length does not significantly affect the model so that will be looked into as well.
+
+
+```{r, echo = FALSE, out.width= "30%"}
+Abalone <- read.table("abalone.data", header = FALSE, sep = ",", col.names = c("Sex", "Length", "Diameter", "Height", "Whole_Weight", "Shucked_Weight", "Viscera_Weight", "Shell_Weight", "Rings")) #intialize data 
+
+Abalone <- Abalone %>% mutate("Age" = Rings + 1.5) %>% select(!"Rings")
+# kable(head(Abalone), align = "c")
+```
+
+
+```{r, echo = FALSE, out.width= "120%"}
+initial_model <- lm(Age~., data = Abalone)
+init_model_summary <- summary(initial_model)
+init_table <- as.data.frame(init_model_summary[[4]])
+kbl(init_table) %>% kable_styling(full_width = T)
+
+# kable(as.data.frame(init_model_summary[[4]]), digits = 5, format = "latex", align = "c") # old way 
+```
+
+
+
+Analyzing the differences in average values for each predictor based on sex, there is a marginal difference between the males and the females, however the status of an infant demonstrates a clear difference in the values.  As such, a more appropriate replacement for the sex category is the feature “Is_infant," which will be a true and false value for each instance. 
+
+```{r, echo = FALSE, out.width= "30%"}
+kable(as.data.frame(lapply(Abalone[,-1], function(x){tapply(x, Abalone$Sex, mean)})), digits = 5, format = "latex") #Check to see if any significant differences exist between genders
+```
+
+
+In addressing the significance of the length variable, feature selection is in order to assuredly determine which of the variables should be included in a proper model of the Age prediction. Running an exhaustive model of all possible combinations of the features, a table is constructed to show highligh the adjusted R^2, BIC, and CP for each set of features. It becomes clear that the 7-variable model that excludes length presents the best model with respect to accounting for the variance of the data, so going forward length will be excluded. It is worth noting that the multicollinearity of the predictor variables is high as shown in the table below, however the exhaustive search of variables trumps this fact and reassures that the set of predictors selected will result in the model based on the most accurate predictors, which is further confirmed in the significance levels shown later. 
+
+```{r, echo = FALSE, out.width= "30%"}
+Abalone <- Abalone %>% mutate("Is_Infant" = Sex == "I") %>% select(!"Sex")# We replace the sex column with "Is infant" since Male and Female are not significant predictors 
+```
+
+```{r, echo = FALSE, out.width="50%"}
+best_vars <- regsubsets(Age~., data = Abalone, nvmax = 9, method='exhaustive')
+summary_best <- summary(best_vars)
+
+best_adjr2 <- summary_best$adjr2
+best_cp <- summary_best$cp
+best_bic <- summary_best$bic
+
+results <- as.data.frame(cbind(best_adjr2, best_bic, best_cp))
+colnames(results) <- c("AdjR2", "BIC", "CP")
+
+Needed <- as.data.frame(summary_best[[7]])
+# row.names(Needed) <- unlist(str_split(paste(1:8, "Var", sep = "-", collapse = " "), pattern = " "))
+# row.names(results) <- unlist(str_split(paste(1:8, "Var", sep = "-", collapse = " "), pattern = " "))
+Needed_results <- cbind(Needed, results)
+
+vifs <- c(vif(lm(Age ~., data = Abalone)), NA, NA, NA)
+vifs <- vapply(vifs, function(x){round(x, digits = 3)}, numeric(1))
+vifs_needed <- rbind(Needed_results, vifs)
+row.names(vifs_needed) <- c(unlist(str_split(paste(1:8, "Var", sep = "-", collapse = " "), pattern = " ")), "VIF")
+
+kable(vifs_needed, format = "latex", digits = 4, col.names = c("Length", "Diameter", "Height", "Whole", "Shucked", "Viscera", "Shell", "Infant", "AdjR2", "BIC", "CP"), align = "c")
+
+Abalone <- Abalone[,-1]
+```
+
+
+## Descriptive Analysis or Statistics
+
+Analyzing some summary statistics of the model, it becomes apparent that the maximum height value is particularly large and may need to be removed, so upon closer inspection, the 1.1 value in the height plot is a particularly egregious leverage point and thus removed. Beyond the height inconsistency, the rest of the points appear to be within a reasonable range of their means. The models of the variables directly compared against the age also show there is a possibility of a linear relationship between the variables, as the age seems to increase with all the measurement variables compared to their low values.
+
+```{r, echo = FALSE, out.width= "24%"}
+# pairs(Abalone)
+plot(Age ~., data = Abalone)
+```
+
+
+```{r, echo = FALSE, out.width= "30%"}
+# as.data.frame(sapply(summary(Abalone[,-ncol(Abalone)]), function(x){unlist(str_split(string = x, ":"))})) #old
+
+vec <- unlist(lapply(summary(Abalone[,-ncol(Abalone)]), function(x){unlist(str_split(string = x, ":"))}))
+summary_table <- as.data.frame(matrix(vec[seq(2, length(vec), by = 2)], 6, 7))
+colnames(summary_table) <- colnames(Abalone[,-ncol(Abalone)])
+rownames(summary_table) <- c("Min.", "1st Qu.", "Median", "Mean", "3rd Qu.", "Max")
+
+kable(summary_table, format = "latex")
+```
+
+
+```{r, echo = FALSE, out.width= "60%"}
+# plot(Abalone$Age ~ Abalone$Height)
+# Abalone[max(Abalone$Height) == Abalone$Height,]
+Abalone <- Abalone[-c(2052, 1418),]
+# head(sort(hatvalues(lm(Abalone$Age ~ Abalone$Height)), decreasing = TRUE))
+# plot(hatvalues(lm(Abalone$Age ~ Abalone$Height)))
+# hatvalues(lm(Abalone$Age ~ Abalone$Height))[hatvalues(lm(Abalone$Age ~ Abalone$Height)) > 4/nrow(Abalone)]
+```
+ 
+
+```{r, echo = FALSE, out.width= "30%"}
+# var(Abalone) #Idk how to interpret
+```
+## Assumptions of Regression Model
+
+```{r, echo = FALSE, out.width= "25%"}
+model_2 <- lm(Age ~., data = Abalone)
+plot(model_2) 
+# summary(model_2)
+```
+
+Observing the diagnostic plots of the initial model, there seems to be a slight pattern in the residuals vs fitted as well as a violation of the normality assumption, so actions must be taken to correct these violations. 
+
+```{r, echo = FALSE, out.width= "55%"}
+# height <- Abalone$Age ~ Abalone$Height
+# model_height <- lm(height)
+# plot(height)
+# abline(model_height, col = "Blue", lwd = 3)
+# 
+# viscera <- Abalone$Age ~ Abalone$Viscera_Weight
+# model_viscera <- lm(viscera)
+# plot(viscera)
+# abline(model_viscera, col = "Blue", lwd = 3)
+```
+
+The weight variables all seem to share a similar pattern relative to age so by inspection, a log transformation seems in order to help the linearity model. Additionally, although it may not be as apparent, transforming the Age variable with a log function also seems to aid in the model’s ability to account for variance as it helped increase the adjusted R^2 value. 
+
+```{r, echo = FALSE, out.width= "25%"}
+height <- Abalone$Age ~ Abalone$Height
+model_height <- lm(height)
+plot(height)
+abline(model_height, col = "Blue", lwd = 3)
+
+viscera <- Abalone$Age ~ Abalone$Viscera_Weight
+model_viscera <- lm(viscera)
+plot(viscera)
+abline(model_viscera, col = "Blue", lwd = 3)
+
+height <- log(Abalone$Age) ~ Abalone$Height
+model_height <- lm(height)
+plot(height)
+abline(model_height, col = "Blue", lwd = 3)
+
+viscera <- log(Abalone$Age) ~ log(Abalone$Viscera_Weight)
+model_viscera <- lm(viscera)
+plot(viscera)
+abline(model_viscera, col = "Blue", lwd = 3)
+```
+
+Furthermore, to aid in the model’s fit of the values, weighted least squares is employed to help negate the the multitude of points that may be skewing the effectiveness of the model. The weights in this model are estimated based on the residuals of a linear model with the fitted values of the original model squared. 
+
+## Linear regression Model 
+
+After applying transformation of the variables, in tandem with the application of weighted least squares, the new and improved regression model demonstrates a higher adjusted R^2 value. 
+
+```{r, echo = FALSE}
+summary_2 <- summary(model_2)
+table_2 <- as.data.frame(summary_2[[4]])
+# kbl(table_2, digits = 5, format = "latex", caption = paste("Before transformation and weighted least squares - Adj. R2 = ", round(summary_2[[9]], digits = 5))) %>% kable_styling(full_width = TRUE, font_size = 9) # Alternate method
+
+kable(table_2, digits = 5, format = "latex", caption = paste("Before transformation and weighted least squares: F-statistic 709.4 and Adj. R2 = ", round(summary_2[[9]], digits = 5))) %>% kable_styling(full_width = TRUE)
+
+model_3 <- lm(log(Abalone$Age) ~ Abalone$Height + Abalone$Is_Infant + Abalone$Diameter + Abalone$Height + log(Abalone$Whole_Weight) + log(Abalone$Shucked_Weight) + log(Abalone$Viscera_Weight) + log(Abalone$Shell_Weight))
+wts <- 1/fitted(lm(abs(residuals(model_3)) ~ fitted(model_3)))^2
+model_4 <- lm(terms(model_3), weights = wts)
+summary_4 <- summary(model_4)
+table_4 <- as.data.frame(summary_4[[5]])
+row.names(table_4) <- c("Intercept", "Height", "Is_Infant", "Diameter", "Log_Whole_Weight", "Log_Shucked_Weight", "Log_Viscera_Weight", "Log_Shell_Weight")
+## kable(table_4, format = "latex", digits = 5, caption = paste("After transformation and weighted least squares - Adj. R2 = ", round(summary_4[[9]], digits = 5)))
+
+kbl(table_4, digits = 5, format = "latex", caption = paste("After transformation and weighted least squares: F-Statistic 1118 and Adj. R2 = ", round(summary_4[[9]], digits = 5))) %>% kable_styling(full_width = TRUE, font_size = 9) # Alternate method
+
+# kable(table_2) %>% kable_styling(full_width = FALSE, position = "right")
+# kable(table_4) %>% kable_styling(full_width = FALSE, position = "left")
+
+#kable(as.data.frame(summary_4[[5]]), digits = 5, format = "latex", row.names = c("Intercept", "Height", "Is_Infant", "Diameter", "Log_Whole_Weight", "Log_Shucked_Weight", "Log_Viscera_Weight", "Log_Shell_Weight"), )
+# t1 <- as.data.frame(summary_2[[4]])
+# t2 <- as.data.frame(summary_4[[5]])
+# kable(list(t1,t2), digits = 5, caption = c("test"))
+```
+
+As well, the F-Statistic is much higher, so another look at the diagnostic plots is appropriate.  
+
+```{r, echo = FALSE, out.width= "25%"}
+plot(model_4)
+```
+As a result of the weighted least squares application combined with the transformation, the normality assumption is much more valid, and the residuals seem to have more homoscedasticity. However, analyzing the residuals vs Leverage plot, a few of them lie outside of the cooks distance, so they are removed from the model. 
+
+```{r, echo = FALSE, out.width= "50%"}
+# kable(Abalone[c(2626, 1217, seq(500, 4000, by = 800)),], format = "latex")
+Abalone <- Abalone[-c(2626, 1217),]
+```
+
+```{r, echo = FALSE, out.width= "50%", fig.align='center'}
+model_5 <- lm(log(Abalone$Age) ~ Abalone$Height + Abalone$Is_Infant + Abalone$Diameter + Abalone$Height + log(Abalone$Whole_Weight) + log(Abalone$Shucked_Weight) + log(Abalone$Viscera_Weight) + log(Abalone$Shell_Weight))
+wts2 <- 1/fitted(lm(abs(residuals(model_5)) ~ fitted(model_5)))^2
+model_6 <- lm(terms(model_5), weights = wts2)
+summary_6 <- summary(model_6)
+
+
+plot(model_6, which = 5)
+kable(as.data.frame(summary_6[[5]]), digits = 5, format = "latex",  caption = paste("Final Adj. R2 = ", round(summary_6[[9]], digits = 5))) %>% kable_styling(full_width = TRUE)
+```
+
+With these removals, the adjusted R^2 improves slightly. However the diagnostic plots reveals there are many more points like those removed, and it would take qmany more removals to lower the scale of the cook's distance plot to a reasonable level,harming the integrity of the data, so the rest of the observations will remain included in the model. 
+
+Finally the anova test all of the parameters are significant, passing the f-test. 
+Since the independent variables pass both the t-test and the f-test, these are the significant predictors in the model predicting age of Abalone. 
+
+```{r, echo = FALSE, out.width= "30%", fig.align='center'}
+anova_6 <- anova(model_6)
+row.names(anova_6) = c("Height", "Is_Infant", "Diameter", "Log_Whole_Weight", "Log_Shucked_Weight", "Log_Viscera_Weight", "Log_Shell_Weight", "Residuals")
+
+kable(anova_6, format = "latex", digits = 6) %>% kable_styling(full_width = TRUE)
+```
+
+
+```{r, echo = FALSE, out.width= "30%"}
+# lol <- Abalone %>% mutate("test_weight" = Shucked_Weight + Viscera_Weight + Shell_Weight) %>% select(Whole_Weight, test_weight)
+# lol <- lol %>%mutate("diff" = abs(lol$Whole_Weight - lol$test_weight)) %>% arrange(desc(diff))
+# lol[lol$test_weight > lol$Whole_Weight,] %>% arrange(desc(diff))
+
+# I have no idea what the difference in weights are
+```
+
+
+## Conclusion 
+|    After applying a few different techniques to aid in the linear model's accuracy and validity of assumptions, the R^2 value did not reach particularly high percentages. This indicates that throughout the data set the noise term in the model is quite impactful and causes a reasonable amount of variance that simply cannot be explained. The relationship however is still strong between the measurements of an Abalone relative to its age. Overall the diagnostic plots of the adjusted model meet the assumptions of a linear model fairly well, retaining a reasonable normality level and displaying minimal, if any pattern in the residuals. The original predictors of Length and sex were not found to be significant and are not useful in determining the age of an Abalone.  
+|    Because all the results were scaled by a factor of 1/200 before the data was processed and the fact that the units of measurement for volume were all in mm,  the coefficients between the predictors can be directly compared. Based on the best model's coefficient results, height has the greatest positive impact on determining the age of an Abalone. To re-transform the information into interpretable results, the predictor coefficients that did not receive a log transformation must be exponentiated. In the case for height, the coefficient becomes 2.231, meaning for every increase of 200mm in height, the age of an Abalone is predicted to  increased by a factor of 2.231. Other predictor variables that were not log scaled follow a similar logic, so for the status of being an infant and the diameter of the Abalone, the predicted age decreases by a factor of 0.952 and 0.652 for every 200mm increase in diameter respectively. The weight variables of the Abalone were all log scaled, meaning that for every 1% increase of 200g, the predicted age will be affected will change by the factor of the coefficient. So for the whole weight, it is predicted if the whole weight were to increase by 2g, then the predicted age increased by a factor of about 45%, similarly if the shell weight were to increase by 2g then the predicted age would increase by about 30%. With regard to the negative weights, if shucked weight or viscera weight increase by 2g, then the predicted age decrease by about 48% and 33% respectively.  
+|    Given the nature of how things grow with age, the coefficients for height, whole weight, and shell weight intuitively make sense, since as the organism ages then its body will become larger. Additionally, the status of being too young to have an identified gender and simply being labeled an infant would naturally be correlated with a younger age in the abalone. However more reasoning is necessary for the other negative coefficients, such as how a larger diameter is predicted to relate to a smaller age. From this negative relation, it could be reasoned that younger abalone start off wider in their life cycle and become more elongated as they age, losing diameter length. Shucked weight as a negative predictor in the age of abalone suggests that after a certain point in aging, the usable meat that can be harvested from abalone decreases in weight; a reasonable assumption as some species redistribute their mass to different parts of the body as they age. Finally for the negative predictor of viscera, the weight of the organs seems to decrease with an increased age, where one could reason that the organs of an abalone simply get weaker over time and thus lose mass.  
+|    For future models, a more complex series of transformations may be able to further improve the linearity assumptions of the model, and a better look into the data collection and explanation of outliers would help explain the findings of a few peculiar observations. 
+  
+  
+```{r, echo = FALSE}
+# scaled_back <- as.data.frame(vapply(Abalone, function(x){x*200}, numeric(nrow(Abalone))))
+# scaled_back$Age <- Abalone$Age  
+# scaled_back$Is_Infant <- Abalone$Is_Infant
+# scaled_back
+```
+
+
